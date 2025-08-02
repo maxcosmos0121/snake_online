@@ -3,7 +3,7 @@ from datetime import datetime
 import asyncio
 
 connected_users = set()
-rooms = {}  # room_id -> {name, status, created_at, owner, users: [sid]}
+rooms = {}  # room_id -> {name, status, created_at, owner: sid, users: [sid]}
 lock = asyncio.Lock()
 
 
@@ -55,16 +55,25 @@ def register_events(sio):
     async def disconnect(sid):
         async with lock:
             connected_users.discard(sid)
-            # 从所有房间中移除该用户
             for room_id, info in list(rooms.items()):
                 if sid in info["users"]:
                     info["users"].remove(sid)
                     await sio.leave_room(sid, room_id)
                     print(f"{datetime.now()} [{sid}] 离开房间 [{room_id}]")
-                    # 如果房间为空则删除
-                    if not info["users"]:
+
+                    if sid == info["owner"]:
+                        # 房主断线，解散房间
+                        for uid in info["users"]:
+                            await sio.leave_room(uid, room_id)
+                        await sio.emit("system_room_closed", {
+                            "message": f"房主断线，房间 [{room_id}] 已解散"
+                        }, room=room_id)
                         del rooms[room_id]
-                        print(f"{datetime.now()} 房间 [{room_id}] 已被清空并删除")
+                        print(f"{datetime.now()} 房间 [{room_id}] 因房主离线已解散")
+
+                    elif not info["users"]:
+                        del rooms[room_id]
+                        print(f"{datetime.now()} 房间 [{room_id}] 清空后删除")
 
         print(f"{datetime.now()} [{sid}] 离开游戏 当前在线人数 {len(connected_users)}")
         await broadcast_room_list(sio)
@@ -95,7 +104,7 @@ def register_events(sio):
                 "name": room_name,
                 "status": "未开始",
                 "created_at": created_at,
-                "owner": username,
+                "owner": sid,
                 "users": [sid],
             }
 
@@ -157,21 +166,33 @@ def register_events(sio):
                 await sio.emit("error", {"message": "房间不存在"}, to=sid)
                 return
 
-            if sid in rooms[room_id]["users"]:
-                rooms[room_id]["users"].remove(sid)
-                # 如果房间清空了就删掉
-                if not rooms[room_id]["users"]:
+            info = rooms[room_id]
+            if sid not in info["users"]:
+                return
+
+            info["users"].remove(sid)
+
+            if sid == info["owner"]:
+                # 房主离开 → 解散房间
+                for uid in info["users"]:
+                    await sio.leave_room(uid, room_id)
+                await sio.emit("system_room_closed", {
+                    "message": f"房主 [{username}] 离开，房间 [{room_id}] 已解散"
+                }, room=room_id)
+                del rooms[room_id]
+                print(f"{datetime.now()} 房主 [{username}] 离开，房间 [{room_id}] 解散")
+            else:
+                await sio.leave_room(sid, room_id)
+                leave_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"{leave_time} [{username}] 离开了房间 [{room_id}]")
+
+                await sio.emit("system_leave_room", {
+                    "message": f"{leave_time} [{username}] 离开了房间 [{room_id}]"
+                }, room=room_id)
+
+                if not info["users"]:
                     del rooms[room_id]
-                    print(f"{datetime.now()} 房间 [{room_id}] 已被清空并删除")
-
-        await sio.leave_room(sid, room_id)
-
-        leave_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{leave_time} [{username}] 离开了房间 [{room_id}]")
-
-        await sio.emit("system_leave_room", {
-            "message": f"{leave_time} [{username}] 离开了房间 [{room_id}]"
-        }, room=room_id)
+                    print(f"{datetime.now()} 房间 [{room_id}] 清空后删除")
 
         await broadcast_room_list(sio)
 
