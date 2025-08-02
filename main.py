@@ -1,4 +1,3 @@
-# server.py
 import socketio
 from fastapi import FastAPI
 import uvicorn
@@ -6,7 +5,6 @@ import uvicorn
 # 创建一个 Async Socket.IO 服务器
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI()
-app.mount("/", socketio.ASGIApp(sio, other_asgi_app=app))
 
 # 在线人数记录
 connected_users = set()
@@ -28,5 +26,8 @@ async def chat(sid, data):
     print(f"{sid} says: {data}")
     await sio.emit("chat", {"sid": sid, "message": data}, skip_sid=sid)
 
+# 使用 socketio.ASGIApp 包裹 FastAPI 应用
+socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
+
 if __name__ == '__main__':
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(socket_app, host="0.0.0.0", port=8000)
